@@ -1,0 +1,613 @@
+---
+title: "MODELO DE MINERIA DE DATOS PARA EL ANALISIS DE SENTIMIENTOS EN REDES SOCIALES ORIENTADO A LA PERCEPCION DE LOS USUARIOS ECUATORIANOS SOBRE EL COVID-19"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: journal
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+#------------------ LIBRERIAS ------------------
+
+library(tidyverse);library(textcat);library(ggplot2);library(tm);library(SnowballC);library(wordcloud); 
+library(dplyr);library(rpart);library(rpart.plot);library(randomForest);library(caret);library(streamR);
+library(nnet);library(Metrics);library(treemapify);library(lubridate);library(rtweet);library(httpuv)
+library(gganimate);library(gifski);library(av);library(gapminder);library(readr);library(stringr);library(purrr);
+library(textclean);library(qdapRegex);library(stopwords);library(Rstem);library(sentiment);library(gridExtra);
+library(qdap);library(RColorBrewer);library(tidytext);library(tidyr);library(reshape2);library(lexicon);
+library(textdata);library(syuzhet);library(quanteda);library(quanteda.textplots);library(readtext);library(ggrepel);
+library(ggplot2);library(textstem);library(ROAuth);library(base64enc);library(rjson);library(ndjson);library(RCurl);
+library(e1071);library(DT);library(flexdashboard);library(pROC)
+
+#------------------ Data ------------------
+# FACEBOOK
+# IMPORTAR CONJUNTO DE DATOS CON EL COMANDO READ
+
+data_covidFB <- read_csv("C:/TRABAJO DE TITULACION 2022/FACEBOOK - MODELO DE ANALISIS DE SENTIMIENTOS POR APRENDIZAJE SUPERVISADO/PARTE 3 - TRANSFORMACION DE DATOS/EN OPEN REFINE/data_covidFB.csv")
+View(data_covidFB)
+
+data_covidFB$message<- iconv(data_covidFB$message, "UTF-8", "ASCII//TRANSLIT", sub="")  #caracteres especiales
+X <- data_covidFB$message
+
+
+# crear corpus
+X <- Corpus(VectorSource(X))
+inspect(X[1:5])
+
+# LIMPIEZA
+
+x1 <- tm_map(X, tolower)
+x1 <- tm_map(x1, removeNumbers)
+x1 <- tm_map(x1, removePunctuation)
+x1 <- tm_map(x1, removeWords, stopwords("spanish"))
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+x1 <- tm_map(x1, toSpace, "http\\S+\\s*")
+x1 <- tm_map(x1, toSpace, "http[[:alnum:]]*")
+x1 <- tm_map(x1, toSpace, "#\\S+")
+x1 <- tm_map(x1, toSpace, "@\\S+")
+x1 <- tm_map(x1, toSpace, "[[:cntrl:]]")
+x1 <- tm_map(x1, toSpace, "[[:punct:]]+")
+x1 <- tm_map(x1, toSpace, "\\d")
+
+x1 <- tm_map(x1, removeWords, c("una", "por", "sobre", "sus", "que", "para", "como", "con", "los", "las", "user", "mas", "en", "para", "uv", "mmmmm npi", "k", "uide", "url",
+                                "url", "ano", "solo", "ser", "estan", "dio", "asi", "pued", "aqui", "nueva", "dos", "frent", "rightarrow", "trave", "despu", "tras", "part", "cada", 
+                                "hace", "tambien", "hace", "arrowdown", "hacer", "conoc", "sera", "meno", "tener", "primer", "aun", "dice", "ver", "mientra", "sigu", "luego", "lune", 
+                                "arrowforward", "whitecheckmark", "tan", "call", "sobr", "est", "van"))  
+x1 <- tm_map(x1, stripWhitespace)
+
+# Remueve emojis
+x1<-tm_map(x1, content_transformer(gsub), pattern="\\W",replace=" ")
+
+# Elimina URL
+removeURL <- function(x) gsub("http[^[:space:]]*", " ", x)
+mydata <- tm_map(x1, content_transformer(removeURL))
+
+# Lematización
+x1 <- lemmatize_words(x1)
+
+inspect (x1[1:5])
+
+# Crea una matriz de terminos y que se almacena como tdm
+tdm <-TermDocumentMatrix(x1)
+m <- as.matrix(tdm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 10)
+
+d[d == 'salusted'] <- 'salud'
+
+
+# ASOCIACION DE PALABRAS
+# A traves de la función findAssocs (del paquete tm) encontraremos las asociaciones para cada una de las palabras
+# PalabrasRelacionadas <- findAssocs(tdm, terms = findFreqTerms(tdm, lowfreq = 50), corlimit = 0.25) # Fijando una asociacion mínima de 0.25
+PalabrasRelacionadas <- findAssocs(tdm, terms = c("muerte","covid" ), corlimit = 0.25) 
+PalabrasRelacionadas
+# GRAFICA DE ASOCIACION DE PALABRAS
+asociaciones_df <- list_vect2df(PalabrasRelacionadas, col2 = "palabra", col3 = "correlacion")
+
+# establecer directorio de trabajo
+covid <- read.csv("C:/TRABAJO DE TITULACION 2022/FACEBOOK - MODELO DE ANALISIS DE SENTIMIENTOS POR APRENDIZAJE SUPERVISADO/PARTE 3 - TRANSFORMACION DE DATOS/EN RSTUDIO/resultado_etapa3.csv", sep = ",")
+covid
+
+# EMOCIONES  
+  
+# Como se describe en la ayuda, esta función clasifica emociones (e.g. anger, disgust, fear, joy, sadness, surprise) de una serie de textos
+covid_class_emo <- classify_emotion(covid, algorithm="bayes", prior=1.0)
+
+# La función nos retorna 7 columnas: anger, disgust, fear, joy, sadness, surprise y best_fit para cada fila del documento
+head(covid_class_emo)
+# Sustuir el nombre de las emociones en ingles a español
+covid_class_emo[covid_class_emo == 'anger'] <- 'Enfado'
+covid_class_emo[covid_class_emo == 'fear'] <- 'Miedo'
+covid_class_emo[covid_class_emo == 'joy'] <- 'Alegria'
+covid_class_emo[covid_class_emo == 'sadness'] <- 'Tristeza'
+covid_class_emo[covid_class_emo == 'SURPRISE'] <- 'Sorpresa'
+covid_class_emo[covid_class_emo == 'DISGUST'] <- 'Asco'
+
+# Ahora lo que vamos a hacer es crear una variable denominada "emotion" en la que guardemos los resultados que ha obtenido el algoritmo de forma ordenada. La que según el algoritmo encaja mejor (BEST_FIT) la guardamos
+emotion <- covid_class_emo[, 7]
+
+# sustituir NA por "desconocido"
+emotion[is.na(emotion)] <- "Sentimiento Desconocido"
+table(emotion, useNA = "ifany")
+
+# POLARIDAD
+
+# Ejecutamos la función de clasificación de polaridad
+covid_class_pol <- classify_polarity(covid, algorithm="bayes")
+head(covid_class_pol, 5)
+
+covid_class_pol[covid_class_pol == 'negative'] <- 'Negativo'
+covid_class_pol[covid_class_pol == 'neutral'] <- 'Neutral'
+covid_class_pol[covid_class_pol == 'positive'] <- 'Positivo'
+
+# Ahora guardamos con la variable polarity los resultados obtenidos de la columna "BEST_FIT". 
+# Esto nos permitirá conocer hacia donde se inclina la balanza, bien hacia comentarios positivos o negativos
+polarity <- covid_class_pol[, 4]
+head(polarity)
+# En una tabla
+table(polarity, useNA = 'ifany')
+
+# Podemos recopilar la información en un dataframe por si más adelante queremos utilizarlo. Lo clasificamos en texto, emoción y polaridad.
+
+covid_sentiment_dataframe <- data.frame(text=covid, emotion=emotion, stringsAsFactors=FALSE)
+head(covid_sentiment_dataframe, 5)
+
+covid_polarity_dataframe <- data.frame(text=covid, polarity=polarity, stringsAsFactors=FALSE)
+head(covid_sentiment_dataframe, 5)
+
+#TWITTER
+
+covid <- read.csv("C:/TRABAJO DE TITULACION 2022/TWITTER - MODELO DE ANALISIS DE SENTIMIENTOS POR LEXICONES/data_covidTW.csv", sep = ",")
+covid
+# Sacamos el texto y lo definimos con la siguiente variable
+covid_txt <- covid$text
+# Mostramos los 10 primeros
+head(covid_txt, 10)
+
+#LIMPIEZA
+
+#covid_txt <- iconv(covid_txt, "latin1", "ASCII//TRANSLIT", sub="")
+covid_txt <- iconv(covid_txt, "UTF-8", "ASCII//TRANSLIT", sub="")  #caracteres especiales
+covid_txt <- gsub("[^a-zA-Z0-9 ]", "", covid_txt) #caracteres no alfanum?ricos
+
+# Quitando los hashtag, retweets y usuarios en los tweets
+covid_txt <- gsub("#\\w+","", covid_txt)
+covid_txt <- gsub("@\\w+","", covid_txt)
+covid_txt <- gsub("(RT|via)((?:\\b\\W*@\\w+)+)","", covid_txt)
+
+# Quitando los signos de puntuacion, numeros y textos con numeros
+covid_txt <- gsub("[[:punct:]]","", covid_txt)
+covid_txt <- gsub("\\w*[0-9]+\\w*\\s*", "", covid_txt)
+
+#Quitando URL y emojis
+covid_txt <- gsub("http[^[:blank:]]+", "", covid_txt)
+covid_txt <- gsub("http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA
+                                -F][0-9a-fA-F]))+","", covid_txt)
+covid_txt <- gsub("URL","", covid_txt)
+covid_txt <-  gsub("\\bhttp[a-zA-Z0-9]*\\b", "", covid_txt) #LINKS HTML
+covid_txt <- gsub('<.*>', '', enc2native(covid_txt))
+
+#Quitando espacios y tabuladores innecesarios
+covid_txt <- gsub("[ \t]{2,}", "", covid_txt)
+covid_txt <- gsub("^\\s+|\\s+$", "", covid_txt)
+
+# Quitando otros detalles
+covid_txt <- gsub("[^[:alnum:]]", " ", covid_txt)
+covid_txt <- gsub('\\d+', '', covid_txt)
+covid_txt <- gsub("  ", " ", covid_txt) # Reemplazar doble espacio con espacio simple
+covid_txt <- gsub("^[[:space:]]*","", covid_txt) # Eliminar los espacios en blanco iniciales
+covid_txt <- gsub("[[:space:]]*$","", covid_txt) # Eliminar espacios en blanco finales
+covid_txt <- gsub(" +"," ",covid_txt) # Eliminar espacios en blanco adicionales
+covid_txt <- gsub("<(.*)>", "", covid_txt)# Eliminar molestos Unicodes como <U+A>
+
+duplicated(covid_txt) #EN CONSOLA MOSTRAR VALORES DUPLICADOS
+# covid_duplicados = covid_txt[duplicated(covid_txt),] #PARA SABER QUE FILAS SON LAS DUPLICADAS
+covid_txt_2 = unique(covid_txt) # ELIMINA LOS REGISTROS DUPLICADOS
+
+# CREACION DEL CORPUS
+
+covid_corpus<-Corpus(VectorSource(covid_txt_2))
+inspect(covid_corpus[1:10])
+
+# MAS DEPURACIÓN 
+# CON FUNCIONES UTILES DE LOS PAQUETES RBASE Y TM
+
+# tolower(): Pasamos todo a minUsculas (Cuidado si se buscan nombre propios) (R base)
+covid_corpus <- tm_map(covid_corpus, content_transformer(tolower))
+
+# Devuelve NA en lugar de un error de la funciÃ³n tolower
+tryTolower <- function(x)
+{
+  # regresa NA cuando hay un error
+  y = NA
+  # tryCatch error
+  try_error = tryCatch(tolower(x), error = function(e) e)
+  # si no es error
+  if (!inherits(try_error, 'error'))
+    y = tolower(x)
+  return(y)
+}
+
+covid_corpus <- tm_map(covid_corpus, content_transformer(tryTolower))
+
+# Reduce prefijos y sufijos en palabras, lo que facilita la agregacion de terminos
+covid_corpus <- tm_map(covid_corpus, stemDocument)
+covid_corpus <- lemmatize_words(covid_corpus) 
+
+# Elimina palabras vacias comunes en ingles
+covid_corpus <- tm_map(covid_corpus, removeWords, stopwords("english"))
+
+# Usamos removeWords con stopwords("spanish") para eliminar palabras vacias, es decir, aquellas con poco valor para el analisis, tales como algunas preposiciones y muletillas
+covid_corpus<- tm_map(covid_corpus, removeWords, stopwords("spanish"))
+
+## Se elimina tu propia palabra vacia
+# Y se agrega estas palabras vacias como un vector de caracteres
+covid_corpus <- tm_map(covid_corpus, removeWords, c("una", "por", "sobre", "sus", "que", "para", "como", "con", "los", "las", "user", "mas", "en", "para", "uv", "mmmmm npi", "k", "uide", "url",
+                                                    "url", "ano", "solo", "ser", "estan", "dio", "asi", "pued", "aqui", "nueva", "dos", "frent", "rightarrow", "trave", "despu", "tras", "part", "cada", 
+                                                    "hace", "tambien", "hace", "arrowdown", "hacer", "conoc", "sera", "meno", "tener", "primer", "aun", "dice", "ver", "mientra", "sigu", "luego", "lune", 
+                                                    "arrowforward", "whitecheckmark", "tan", "call", "sobr", "est", "desd", "ant", "estamo", "ant", "debe", "vez", "ello", "porqu", "entr", "tien", "segun", "dond")) 
+
+# Reemplazo de "/", y "|" con espacio. Incluso es posible ser muy especifico con respecto a los simbolos o palabras a eliminar
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+covid_corpus <- tm_map(covid_corpus, toSpace, "/")
+covid_corpus <- tm_map(covid_corpus, toSpace, "\\|")
+
+covid_corpus <- tm_map(covid_corpus, content_transformer(removePunctuation)) #Eliminación de signos de puntuación
+covid_corpus <- tm_map(covid_corpus, content_transformer(gsub), pattern = "[-]+", replacement= "")
+covid_corpus <- tm_map(covid_corpus, content_transformer(removeNumbers)) # Eliminación de números
+
+# stripWhitespace(): Quita espacios extra (paquete tm)
+covid_corpus <- tm_map(covid_corpus, stripWhitespace)
+
+inspect(covid_corpus[1:10])
+
+# Crea una matriz de terminos y que se almacena como tdm a partir del corpus
+covid_tdm <-TermDocumentMatrix(covid_corpus)
+# Inspeccionar la matriz de terminos
+inspect(covid_tdm)
+# Tenemos 90212 filas y 169649 columnas.
+dim(covid_tdm)
+
+# Encuentra terminos frecuentes al menos 10 veces en el TDM
+findFreqTerms(covid_tdm, 10)
+
+# Reducir las palabras que se repiten muy poco o son pocos frecuentes ajustando la dispersión al 99%
+covid_tdm <- removeSparseTerms(covid_tdm, sparse = 0.999)
+
+# Convertir en una matriz
+covid_m <- as.matrix(covid_tdm)
+# Tenemos 1954 filas y 169649 columnas.
+dim(covid_m)
+
+# Para que pueda resumir la frecuencia de los terminos, debera? sumar en cada fila porque cada fila es un termino unico en el corpus
+covid_words <- sort(rowSums(covid_m),decreasing=TRUE)
+
+# Guardamos las frecuencias en un data.frame:
+covid_freq <- data.frame(palabra = names(covid_words),frecuencia=covid_words)
+head(covid_freq)
+
+#elimino caracteres invalidos
+covid_m <- covid_freq  %>% 
+  filter(xfun::is_ascii(palabra)== T)
+
+#Reemplazando palabras mal escritas
+covid_freq [covid_freq  == 'pai'] <- 'pais'
+covid_freq [covid_freq  == 'pacient'] <- 'paciente'
+covid_freq [covid_freq  == 'detall'] <- 'detalle'
+covid_freq [covid_freq  == 'muert'] <- 'muerte'
+covid_freq [covid_freq  == 'frent'] <- 'frente'
+covid_freq [covid_freq  == 'crisi'] <- 'crisis'
+covid_freq [covid_freq  == 'gent'] <- 'gente'
+covid_freq [covid_freq  == 'hospit'] <- 'hospital'
+covid_freq [covid_freq == 'president'] <- 'presidente'
+covid_freq [covid_freq  == 'person'] <- 'persona'
+covid_freq [covid_freq   == 'alcald'] <- 'alcalde'
+covid_freq [covid_freq == 'mese'] <- 'meses'
+covid_freq [covid_freq == 'inform'] <- 'informe'
+covid_freq [covid_freq == 'posibl'] <- 'posible'
+covid_freq [covid_freq == 'manana'] <- 'mañana'
+covid_freq [covid_freq == 'important'] <- 'importante'
+covid_freq [covid_freq == 'urgent'] <- 'urgente'
+covid_freq [covid_freq == 'nino'] <- 'nino'
+covid_freq [covid_freq == 'juev'] <- 'jueves'
+covid_freq [covid_freq == 'viern'] <- 'viernes'
+covid_freq [covid_freq == 'siguient'] <- 'siguiente'
+covid_freq [covid_freq == 'miercol'] <- 'miercoles'
+covid_freq [covid_freq == 'mart'] <- 'martes'
+covid_freq [covid_freq == 'guaya'] <- 'guayas'
+covid_freq [covid_freq == 'siempr'] <- 'siempre'
+covid_freq [covid_freq == 'parec'] <- 'pared'
+covid_freq [covid_freq == 'espana'] <- 'espana'
+covid_freq [covid_freq == 'octubr'] <- 'octubre'
+
+#Ordenamos las palabras:
+covid_freq <- covid_freq[order(covid_freq[,2], decreasing=T),]
+# Tabla de frecuencias (primeras 20 más frecuentes)
+covid_freq[1:20,]
+
+texto_palabras <- get_tokens(covid_freq$palabra)
+length(texto_palabras) #Para ver cuántas palabras o tokens hay en este texto
+
+# Extracción de datos con el Léxico de Sentimientos NRC
+sentimientos_df <- get_nrc_sentiment(texto_palabras, lang="spanish")
+head(sentimientos_df)
+
+# Resumen de la valencia sentimental y emocional en la data
+summary(sentimientos_df)
+
+trad_emociones <- function(cadena){
+  case_when(
+    cadena == "anger" ~ "Ira",
+    cadena == "anticipation" ~ "Anticipacion",
+    cadena == "disgust" ~ "Aversion",
+    cadena == "fear" ~ "Miedo",
+    cadena == "joy" ~ "Alegria",
+    cadena == "sadness" ~ "Tristeza",
+    cadena == "surprise" ~ "Asombro",
+    cadena == "trust" ~ "Confianza",
+    cadena == "negative" ~ "Negativo",
+    cadena == "positive" ~ "Positivo",
+    TRUE ~ cadena
+  )
+}
+
+# Resumen de las emociones/sentimientos
+sentimientos <- sentimientos_df %>% 
+  gather(sentimiento, cantidad) %>% 
+  mutate(sentimiento = trad_emociones(sentimiento)) %>% 
+  group_by(sentimiento) %>% 
+  summarise(total = sum(cantidad))
+head(sentimientos, 10)
+index <- sentimientos$sentimiento %in% c("Positivo", "Negativo")
+
+# Recuento de palabras con cada emocion y sentimiento
+
+#ALEGRÍA
+
+palabras_alegria <- texto_palabras[sentimientos_df$joy> 0]
+palabras_alegria_orden <- sort(table(unlist(palabras_alegria)), decreasing = TRUE)
+head(palabras_alegria_orden, n = 12)
+
+#ANTICIPACION
+
+palabras_anticipacion <- texto_palabras[sentimientos_df$anticipation> 0]
+palabras_anticipacion_orden <- sort(table(unlist(palabras_anticipacion)), decreasing = TRUE)
+head(palabras_anticipacion_orden, n = 12)
+
+#ASOMBRO
+
+palabras_asombro <- texto_palabras[sentimientos_df$surprise> 0]
+palabras_asombro_orden <- sort(table(unlist(palabras_asombro)), decreasing = TRUE)
+head(palabras_asombro_orden, n = 12)
+
+#AVERSIÓN
+
+palabras_aversion <- texto_palabras[sentimientos_df$disgust> 0]
+palabras_aversion_orden <- sort(table(unlist(palabras_aversion)), decreasing = TRUE)
+head(palabras_aversion_orden, n = 12)
+
+#CONFIANZA
+
+palabras_confianza <- texto_palabras[sentimientos_df$trust> 0]
+palabras_confianza_orden <- sort(table(unlist(palabras_confianza)), decreasing = TRUE)
+head(palabras_confianza_orden, n = 12)
+
+#IRA
+
+palabras_ira <- texto_palabras[sentimientos_df$anger> 0]
+palabras_ira_orden <- sort(table(unlist(palabras_ira)), decreasing = TRUE)
+head(palabras_ira_orden, n = 12)
+
+#MIEDO
+
+palabras_miedo <- texto_palabras[sentimientos_df$fear> 0]
+palabras_miedo_orden <- sort(table(unlist(palabras_miedo)), decreasing = TRUE)
+head(palabras_miedo_orden, n = 12)
+
+#TRISTEZA
+
+palabras_tristeza <- texto_palabras[sentimientos_df$sadness> 0]
+palabras_tristeza_orden <- sort(table(unlist(palabras_tristeza)), decreasing = TRUE)
+head(palabras_tristeza_orden, n = 12)
+
+#PALABRAS POSITIVAS
+
+palabras_positivas <- texto_palabras[sentimientos_df$positive> 0]
+palabras_positivas_orden <- sort(table(unlist(palabras_positivas)), decreasing = TRUE)
+head(palabras_positivas_orden, n = 12)
+
+#PALABRAS NEGATIVAS
+
+palabras_negativas <- texto_palabras[sentimientos_df$negative> 0]
+palabras_negativas_orden <- sort(table(unlist(palabras_negativas)), decreasing = TRUE)
+head(palabras_negativas_orden, n = 12)
+
+# NUBE DE PALABRAS DE COMPARACIÓN DE EMOCIONES
+
+nube_emociones_vector <- c(
+  paste(texto_palabras[sentimientos_df$sadness > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$joy > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$anger > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$surprise > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$disgust > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$trust > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$anticipation > 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$fear > 0], collapse = " "))
+
+nube_emociones_vector <- iconv(nube_emociones_vector, "latin1", "UTF-8")
+nube_emociones_vector <- removeWords(nube_emociones_vector, stopwords("spanish"))
+
+# crear corpus
+nube_corpus <- Corpus(VectorSource(nube_emociones_vector))
+
+# crear matriz de documento de término
+nube_tdm <- TermDocumentMatrix(nube_corpus)
+# convertir a matriz
+nube_tdm <- as.matrix(nube_tdm)
+
+# agregar nombres de columna
+colnames(nube_tdm) <- c('tristeza', 'alegria', 'ira', 'asombro', 'aversion', 'confianza', 'anticipation', 'miedo')
+head(nube_tdm)
+
+# NUBE DE PALABRAS DE COMPARACIÓN DE SENTIMIENTOS
+
+nube_emociones_vector_2 <- c(
+  paste(texto_palabras[sentimientos_df$positive> 0], collapse = " "),
+  paste(texto_palabras[sentimientos_df$negative> 0], collapse = " "))
+
+nube_emociones_vector_2 <- iconv(nube_emociones_vector_2, "latin1", "UTF-8")
+nube_emociones_vector_2 <- removeWords(nube_emociones_vector_2, stopwords("spanish"))
+
+# crear corpus
+nube_corpus_2 <- Corpus(VectorSource(nube_emociones_vector_2))
+
+# crear matriz de documento de término
+nube_tdm_2 <- TermDocumentMatrix(nube_corpus_2)
+# convertir a matriz
+nube_tdm_2 <- as.matrix(nube_tdm_2)
+
+# agregar nombres de columna
+colnames(nube_tdm_2) <- c('Positivo', 'Negativo')
+head(nube_tdm_2)
+
+# Analisis Syuzhet: grafico de trayectoria emocional con simple_plot
+# Es un estudio de la fluctuación de los sentimientos positivos y negativos a lo largo de la BD
+sentimientos_valencia <- (sentimientos_df$negative *-1) + sentimientos_df$positive
+
+```
+
+# Introduccion {.sidebar}
+
+Este tablero muestra los resultados del Proyecto Integrador propuesto por Macias Mera Vanessa Nicole y Pico Patino Angeline Rosalina. 
+El modelo de mineria de datos realiza la clasificacion de comentarios en redes sociales bajo un enfoque supervisado empleando lexicones y otros principios de mineria de opinion sobre el brote de COVID-19 en Ecuador.
+
+Fuentes de Datos:
+
+* Twitter: https://github.com/dh-miami/narratives_covid19/tree/master/twitter-corpus
+* Facebook: https://www.facebook.com/SaludEcuador
+
+Este tablero se actualizara por ultima vez:
+```{r}
+
+Sys.time()
+```
+
+# Facebook
+
+## {.tabset}
+
+### ASOCIACION DE PALABRAS 
+
+```{r}
+ggplot(asociaciones_df, aes(correlacion, palabra)) + 
+  geom_point(size = 3) + 
+  theme_classic()
+```
+
+### NUBE DE PALABRAS 
+
+```{r}
+wordcloud(words = d$word, freq = d$freq, min.freq = 1,
+          max.words=100, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+### FRECUENCIA DE PALABRAS 
+
+```{r}
+barplot(d[1:10,]$freq, las = 2, names.arg = d[1:10,]$word,        
+        col =heat.colors(10), main ="FRECUENCIA DE PALABRAS", xlab = "Palabra", ylab = "Frecuencia", cex.names=0.8)
+```
+
+### BARRA DE EMOCIONES 
+
+```{r}
+ggplot(covid_sentiment_dataframe, aes(x=emotion)) + geom_bar(aes(y=..count.., fill=emotion)) +
+  scale_fill_brewer(palette="Dark2") +
+  ggtitle("Sentimientos en los comentarios de Facebook de usuarios ecuatorianos", subtitle = "SOBRE EL COVID19 EN EL 2020") +
+  theme(legend.position="right", plot.title = element_text(size=12, face='bold')) + ylab("Numero de comentarios") + xlab("Tipos de emocion")
+
+```
+
+### BARRA DE POLARIDAD 
+
+```{r}
+ggplot(covid_polarity_dataframe, aes(x=polarity)) +
+  geom_bar(aes(y=..count.., fill=polarity)) +
+  scale_fill_brewer(palette="RdYlBu") +
+  ggtitle("Valoracion positiva, neutral o negativa de los comentarios de Facebook", subtitle = " de usuarios ecuatorianos SOBRE EL COVID19 EN EL 2020") +
+  theme(legend.position="bottom", plot.title = element_text(size=11, face='bold')) + ylab("Numero de Tweets") + xlab("Tipos de polaridad")
+
+```
+
+# Twitter
+
+## {.tabset}
+
+### NUBE DE PALABRAS 
+
+```{r}
+wordcloud(words = covid_freq$palabra, freq = covid_freq$frecuencia, min.freq = 1,
+          max.words=150, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"),  family="serif")
+```
+
+### FRECUENCIA DE PALABRAS 
+
+```{r}
+barplot(covid_freq[1:10,]$frecuencia, las = 2, names.arg = covid_freq[1:10,]$palabra,        
+        col =heat.colors(10), main ="FRECUENCIA DE PALABRAS EN TWEETS ECUATORIANOS DEL COVID19 DURANTE EL 2020", xlab = "Palabra", ylab = "Frecuencia", cex.names=0.8)
+```
+
+### FRECUENCIA DE PALABRAS CON PORCENTAJE 
+
+```{r}
+covid_freq %>%
+  mutate(perc = (frecuencia/sum(frecuencia))*100) %>%
+  .[1:10, ] %>%
+  ggplot(aes(palabra, perc)) +
+  geom_bar(stat = "identity", color = "black", fill = "#87CEFA") +
+  geom_text(aes(hjust = 1.3, label = round(perc, 2))) + 
+  coord_flip() +
+  labs(title = "Diez palabras frecuentes en tweets de usuarios", subtitle = " ecuatorianos sobre el COVID19, 2020", x = "Palabras", y = "Porcentaje de uso")
+
+```
+
+### BARRA DE EMOCIONES 
+
+```{r}
+sentimientos[!index,] %>%
+  mutate(Porcentaje= total/sum(sentimientos[!index,]$total)) %>% 
+  ggplot() +
+  aes(sentimiento, total) +
+  geom_bar(aes(fill = sentimiento), stat = "identity") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(label  = scales::percent(Porcentaje, 0.1)),
+            vjust = 1.5, color = "black",
+            size = 5) +
+  xlab(NULL) +
+  ylab("Frecuencia") +
+  ggtitle("Ocho Emociones en los Tweets de usuarios ecuatorianos sobre el COVID 19 EN ECUADOR durante el 2020")
+```
+
+### BARRA DE POLARIDAD 
+
+```{r}
+sentimientos[index,] %>% 
+  mutate(Porcentaje= total/sum(sentimientos[index,]$total)) %>% 
+  ggplot() +
+  aes(sentimiento, total) +
+  geom_bar(aes(fill = sentimiento), stat = "identity") +
+  geom_text(aes(label = scales::percent(Porcentaje, 0.1)),
+            vjust = 1.5, color = "black",
+            size = 5) +
+  xlab(NULL) +
+  ylab("Frecuencia") +
+  ggtitle("Valoracion positiva o negativa de los Tweets sobre el COVID 19 EN ECUADOR durante el 2020")
+```
+
+### NUBE DE PALABRAS DE COMPARACION DE EMOCIONES
+
+```{r}
+comparison.cloud(nube_tdm, random.order = FALSE,
+                 colors = c("#00B2FF", "red", "#FF0099", "#6600CC", "green", "orange", "blue", "brown"),
+                 title.size = 1, max.words = 300, scale = c(2.5, 1), rot.per = 0.4)
+```
+
+### NUBE DE PALABRAS DE COMPARACION DE SENTIMIENTOS 
+
+```{r}
+comparison.cloud(nube_tdm_2, random.order = FALSE,
+                 colors = c("red", "green"), 
+                 title.size = 1, max.words = 300, scale = c(1, 1), rot.per = 0.4)
+```
+
+### ANALISIS SYUZHET
+
+```{r}
+simple_plot(sentimientos_valencia)
+```
+
+
